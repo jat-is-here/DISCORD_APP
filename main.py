@@ -7,7 +7,6 @@ from duckduckgo_search import DDGS
 from threading import Thread
 import dotenv
 from datetime import timedelta
-import json
 
 # -------------------- ENV --------------------
 dotenv.load_dotenv()
@@ -47,39 +46,37 @@ def web_search(query, max_results=3):
     summary = "\n".join([f"- {r['title']} ({r['href']})" for r in results])
     return summary or "No results found."
 
-# -------------------- LLaMA 3.3 AI SETUP --------------------
-from transformers import AutoTokenizer
-from auto_gptq import AutoGPTQForCausalLM
+# -------------------- LIGHTWEIGHT AI SETUP --------------------
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
-MODEL_NAME = "TheBloke/Llama-3-13B-4bit-GPTQ"  # Quantized model
-CONTEXT_WINDOW = 1024  # Number of tokens to remember
+MODEL_NAME = "distilgpt2"
+CONTEXT_WINDOW = 512
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoGPTQForCausalLM.from_quantized(MODEL_NAME, device="cuda" if torch.cuda.is_available() else "cpu")
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
 
-# Keep a conversation history per user
 conversation_histories = {}
 
 def add_to_history(user_id, message):
     history = conversation_histories.get(user_id, [])
     history.append(message)
-    # Keep last N messages
     conversation_histories[user_id] = history[-CONTEXT_WINDOW:]
 
-def generate_reply_local(user_id, user_message, max_tokens=256):
+def generate_reply_local(user_id, user_message, max_tokens=100):
     add_to_history(user_id, f"User: {user_message}")
     history = "\n".join(conversation_histories[user_id])
     prompt = f"{history}\nAI: "
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    outputs = model.generate(**inputs, max_new_tokens=max_tokens)
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    outputs = model.generate(**inputs, max_new_tokens=max_tokens, pad_token_id=tokenizer.eos_token_id)
     reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    # Save AI response to history
     add_to_history(user_id, f"AI: {reply}")
     return reply.strip()
 
+# -------------------- ACTION DECIDER --------------------
 def decide_action_local(user_message):
-    # Very simple action decider based on keywords
     msg = user_message.lower()
     if msg.startswith("kick"):
         return "KICK"
@@ -105,7 +102,6 @@ def decide_action_local(user_message):
         return "CHAT"
 
 def parse_rule_local(user_text):
-    """Convert owner's instruction into a moderation rule (condition + action)."""
     try:
         if "mute" in user_text.lower():
             word = user_text.split("mute")[-1].strip()
@@ -133,31 +129,28 @@ async def apply_rules(message):
             if any(oid == message.author.id for oid in OWNER_IDS):
                 triggered = True
         if triggered:
-            if act == "MUTE":
-                try:
+            try:
+                if act == "MUTE":
                     await message.author.timeout(timedelta(minutes=10), reason="Rule violation")
                     await message.channel.send(f"⏱️ {message.author.mention} muted (rule: {cond})")
-                except discord.Forbidden:
-                    await message.channel.send("❌ No permission to mute this user!")
-            elif act == "KICK":
-                await message.author.kick(reason="Rule violation")
-                await message.channel.send(f"👢 {message.author.mention} kicked (rule: {cond})")
-            elif act == "BAN":
-                await message.author.ban(reason="Rule violation")
-                await message.channel.send(f"🔨 {message.author.mention} banned (rule: {cond})")
-            elif act == "UNMUTE":
-                await message.author.timeout(None, reason="Rule violation")
-                await message.channel.send(f"✅ {message.author.mention} unmuted (rule: {cond})")
-            elif act == "UNBAN":
-                try:
+                elif act == "KICK":
+                    await message.author.kick(reason="Rule violation")
+                    await message.channel.send(f"👢 {message.author.mention} kicked (rule: {cond})")
+                elif act == "BAN":
+                    await message.author.ban(reason="Rule violation")
+                    await message.channel.send(f"🔨 {message.author.mention} banned (rule: {cond})")
+                elif act == "UNMUTE":
+                    await message.author.timeout(None, reason="Rule violation")
+                    await message.channel.send(f"✅ {message.author.mention} unmuted (rule: {cond})")
+                elif act == "UNBAN":
                     bans = await message.guild.bans()
                     for ban_entry in bans:
                         if ban_entry.user.name.lower() in message.content.lower():
                             await message.guild.unban(ban_entry.user, reason="Rule violation - UNBAN")
                             await message.channel.send(f"✅ Unbanned {ban_entry.user} (rule: {cond})")
                             break
-                except discord.Forbidden:
-                    await message.channel.send("❌ I don't have permission to unban!")
+            except discord.Forbidden:
+                await message.channel.send(f"❌ No permission to perform {act}!")
             await log_action(message.guild, f"Rule triggered: {rule} → {message.author}")
             break
 
@@ -181,7 +174,7 @@ async def on_ready():
     await bot.change_presence(activity=discord.Game(name="Serving the Jaat Clan"))
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
 
-# -------------------- DISCORD MESSAGE HANDLING --------------------
+# -------------------- MESSAGE HANDLING --------------------
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
