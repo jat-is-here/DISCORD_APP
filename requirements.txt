@@ -1,5 +1,3 @@
 discord.py
 Flask
 python-dotenv
-requests
-duckduckgo_search
