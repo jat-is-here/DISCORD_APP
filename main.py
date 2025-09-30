@@ -7,6 +7,7 @@ from duckduckgo_search import DDGS
 from threading import Thread
 import dotenv
 from datetime import timedelta
+import requests
 
 # -------------------- ENV --------------------
 dotenv.load_dotenv()
@@ -14,6 +15,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 PREFIX = os.getenv("PREFIX", "!")
 OWNER_IDS = [int(x.strip()) for x in os.getenv("OWNER_IDS", "").split(",") if x.strip().isdigit()]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
+OPENROUTER_API_KEY = os.getenv("API_KEY")
+AI_MODEL = "openrouter-gpt-3.5-mini"
 
 # -------------------- RULES STORAGE --------------------
 rules = []  # Each rule = {"condition": str, "action": str}
@@ -46,34 +49,37 @@ def web_search(query, max_results=3):
     summary = "\n".join([f"- {r['title']} ({r['href']})" for r in results])
     return summary or "No results found."
 
-# -------------------- LIGHTWEIGHT AI SETUP --------------------
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-
-MODEL_NAME = "distilgpt2"
-CONTEXT_WINDOW = 512
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(device)
-
+# -------------------- OPENROUTER AI --------------------
 conversation_histories = {}
 
 def add_to_history(user_id, message):
     history = conversation_histories.get(user_id, [])
     history.append(message)
-    conversation_histories[user_id] = history[-CONTEXT_WINDOW:]
+    conversation_histories[user_id] = history[-20:]  # Keep last 20 messages
 
-def generate_reply_local(user_id, user_message, max_tokens=100):
+def generate_reply_openrouter(user_id, user_message):
     add_to_history(user_id, f"User: {user_message}")
-    history = "\n".join(conversation_histories[user_id])
-    prompt = f"{history}\nAI: "
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    outputs = model.generate(**inputs, max_new_tokens=max_tokens, pad_token_id=tokenizer.eos_token_id)
-    reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    add_to_history(user_id, f"AI: {reply}")
-    return reply.strip()
+    messages = [{"role": "user", "content": msg} for msg in conversation_histories[user_id]]
+
+    payload = {
+        "model": AI_MODEL,
+        "messages": messages,
+        "max_tokens": 150
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.post("https://api.openrouter.ai/v1/chat/completions", json=payload, headers=headers, timeout=15)
+        reply = response.json()["choices"][0]["message"]["content"].strip()
+        add_to_history(user_id, f"AI: {reply}")
+        return reply
+    except Exception as e:
+        print("OpenRouter API error:", e)
+        return "❌ Sorry, I cannot respond right now."
 
 # -------------------- ACTION DECIDER --------------------
 def decide_action_local(user_message):
@@ -206,7 +212,7 @@ async def on_message(message):
         action = decide_action_local(ai_input)
 
         if action == "CHAT":
-            reply = generate_reply_local(message.author.id, ai_input)
+            reply = generate_reply_openrouter(message.author.id, ai_input)
             await message.reply(reply, mention_author=False)
         elif action == "SEARCH":
             results = web_search(ai_input)
