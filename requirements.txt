@@ -1,6 +1,5 @@
-discord.py==2.3.0
-flask==2.3.4
-transformers==4.41.1
-torch==2.2.0
-duckduckgo-search==2.5.7
+discord.py==2.3.2
+Flask==2.3.3
+requests==2.32.0
 python-dotenv==1.0.1
+duckduckgo_search==2.10.2
