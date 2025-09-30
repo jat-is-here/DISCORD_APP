@@ -242,18 +242,17 @@ async def on_message(message):
             elif action == "UNMUTE":
                 await member.timeout(None, reason=reason)
                 await message.reply(f"Unmuted {member}", mention_author=False)
-        elif action in {"SET LOGS","SET PREFIX"} and is_owner(message.author):
-            if action=="SET LOGS" and message.channel_mentions:
-                global LOG_CHANNEL_ID
-                LOG_CHANNEL_ID = message.channel_mentions[0].id
-                await message.reply(f"✅ Log channel set to {message.channel_mentions[0].mention}", mention_author=False)
-            elif action=="SET PREFIX":
-                parts = user_text.split()
-                if len(parts)>=2:
-                    global PREFIX
-                    PREFIX = parts[1]
-                    bot.command_prefix = PREFIX
-                    await message.reply(f"✅ Updated prefix to `{PREFIX}`", mention_author=False)
+        elif action=="SET LOGS" and is_owner(message.author) and message.channel_mentions:
+            global LOG_CHANNEL_ID
+            LOG_CHANNEL_ID = message.channel_mentions[0].id
+            await message.reply(f"✅ Log channel set to {message.channel_mentions[0].mention}", mention_author=False)
+        elif action=="SET PREFIX" and is_owner(message.author):
+            global PREFIX
+            parts = user_text.split()
+            if len(parts) >= 2:
+                PREFIX = parts[1]
+                bot.command_prefix = PREFIX
+                await message.reply(f"✅ Updated prefix to `{PREFIX}`", mention_author=False)
         elif action=="RULES" and is_owner(message.author):
             rule = parse_rule_local(user_text)
             if rule and "condition" in rule and "action" in rule:
