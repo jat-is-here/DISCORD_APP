@@ -3,11 +3,9 @@ import os
 import discord
 from discord.ext import commands
 from flask import Flask
-from duckduckgo_search import DDGS
 from threading import Thread
 import dotenv
 from datetime import timedelta
-import requests
 
 # -------------------- ENV --------------------
 dotenv.load_dotenv()
@@ -15,8 +13,6 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 PREFIX = os.getenv("PREFIX", "!")
 OWNER_IDS = [int(x.strip()) for x in os.getenv("OWNER_IDS", "").split(",") if x.strip().isdigit()]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
-OPENROUTER_API_KEY = os.getenv("API_KEY")
-AI_MODEL = "openrouter-gpt-3.5-mini"
 
 # -------------------- RULES STORAGE --------------------
 rules = []  # Each rule = {"condition": str, "action": str}
@@ -42,45 +38,6 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-# -------------------- WEB SEARCH --------------------
-def web_search(query, max_results=3):
-    with DDGS() as ddgs:
-        results = ddgs.text(query, max_results=max_results)
-    summary = "\n".join([f"- {r['title']} ({r['href']})" for r in results])
-    return summary or "No results found."
-
-# -------------------- OPENROUTER AI --------------------
-conversation_histories = {}
-
-def add_to_history(user_id, message):
-    history = conversation_histories.get(user_id, [])
-    history.append(message)
-    conversation_histories[user_id] = history[-20:]  # Keep last 20 messages
-
-def generate_reply_openrouter(user_id, user_message):
-    add_to_history(user_id, f"User: {user_message}")
-    messages = [{"role": "user", "content": msg} for msg in conversation_histories[user_id]]
-
-    payload = {
-        "model": AI_MODEL,
-        "messages": messages,
-        "max_tokens": 150
-    }
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        response = requests.post("https://api.openrouter.ai/v1/chat/completions", json=payload, headers=headers, timeout=15)
-        reply = response.json()["choices"][0]["message"]["content"].strip()
-        add_to_history(user_id, f"AI: {reply}")
-        return reply
-    except Exception as e:
-        print("OpenRouter API error:", e)
-        return "❌ Sorry, I cannot respond right now."
-
 # -------------------- ACTION DECIDER --------------------
 def decide_action_local(user_message):
     msg = user_message.lower()
@@ -92,8 +49,6 @@ def decide_action_local(user_message):
         return "MUTE"
     elif msg.startswith("unmute"):
         return "UNMUTE"
-    elif msg.startswith("search"):
-        return "SEARCH"
     elif msg.startswith("ping"):
         return "PING"
     elif "who am i" in msg:
@@ -105,7 +60,7 @@ def decide_action_local(user_message):
     elif msg.startswith("rule") or "mute" in msg or "ban" in msg:
         return "RULES"
     else:
-        return "CHAT"
+        return None
 
 def parse_rule_local(user_text):
     try:
@@ -180,7 +135,6 @@ async def on_ready():
     await bot.change_presence(activity=discord.Game(name="Serving the Jaat Clan"))
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
 
-# -------------------- MESSAGE HANDLING --------------------
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -189,17 +143,11 @@ async def on_message(message):
     await apply_rules(message)
 
     user_text = None
-    reply_context = None
 
-    if message.reference and isinstance(message.reference.resolved, discord.Message):
-        replied_message = message.reference.resolved
-        if replied_message.author == bot.user:
-            reply_context = replied_message.content
-            user_text = message.content
+    if message.content.startswith(PREFIX):
+        user_text = message.content[len(PREFIX):].strip()
     elif bot.user.mentioned_in(message):
         user_text = message.content.replace(f"<@!{bot.user.id}>", "").strip()
-    elif message.content.startswith(PREFIX):
-        user_text = message.content[len(PREFIX):].strip()
 
     if not user_text:
         await bot.process_commands(message)
@@ -207,21 +155,13 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+    action = decide_action_local(user_text)
     try:
-        ai_input = f"You are replying to: '{reply_context}'\nUser: '{user_text}'" if reply_context else user_text
-        action = decide_action_local(ai_input)
-
-        if action == "CHAT":
-            reply = generate_reply_openrouter(message.author.id, ai_input)
-            await message.reply(reply, mention_author=False)
-        elif action == "SEARCH":
-            results = web_search(ai_input)
-            await message.reply(f"🔍 Search results:\n{results}", mention_author=False)
-        elif action == "PING":
+        if action == "PING":
             await message.reply(f"Pong! {int(bot.latency*1000)}ms", mention_author=False)
         elif action == "WHO AM I":
-            await message.reply("Hey ♕Master, you are an owner!" if is_owner(message.author) else "You are a member.", mention_author=False)
-        elif action in {"KICK","BAN","MUTE","UNMUTE"}:
+            await message.reply("You are an owner!" if is_owner(message.author) else "You are a member.", mention_author=False)
+        elif action in {"KICK", "BAN", "MUTE", "UNMUTE"}:
             if not is_owner(message.author):
                 await message.reply(f"❌ '{action}' requires owner permissions!", mention_author=False)
                 return
@@ -232,16 +172,13 @@ async def on_message(message):
             reason = user_text.replace(member.mention,"").strip() or "No reason provided"
             if action == "KICK":
                 await member.kick(reason=reason)
-                await message.reply(f"Kicked {member}", mention_author=False)
             elif action == "BAN":
                 await member.ban(reason=reason)
-                await message.reply(f"Banned {member}", mention_author=False)
             elif action == "MUTE":
                 await member.timeout(timedelta(minutes=10), reason=reason)
-                await message.reply(f"Muted {member} for 10 mins", mention_author=False)
             elif action == "UNMUTE":
                 await member.timeout(None, reason=reason)
-                await message.reply(f"Unmuted {member}", mention_author=False)
+            await message.reply(f"{action} executed on {member}", mention_author=False)
         elif action=="SET LOGS" and is_owner(message.author) and message.channel_mentions:
             global LOG_CHANNEL_ID
             LOG_CHANNEL_ID = message.channel_mentions[0].id
@@ -255,13 +192,9 @@ async def on_message(message):
                 await message.reply(f"✅ Updated prefix to `{PREFIX}`", mention_author=False)
         elif action=="RULES" and is_owner(message.author):
             rule = parse_rule_local(user_text)
-            if rule and "condition" in rule and "action" in rule:
+            if rule:
                 rules.append(rule)
                 await message.reply(f"✅ Added rule: If {rule['condition']} then {rule['action']}", mention_author=False)
-            else:
-                await message.reply("❌ Failed to parse rule.", mention_author=False)
-        else:
-            await message.reply("❌ Unable to determine action.", mention_author=False)
     except Exception as e:
         await message.reply(f"❌ Error: {e}", mention_author=False)
         print("Error in on_message:", e)
