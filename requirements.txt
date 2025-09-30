@@ -1,0 +1,8 @@
+discord.py
+flask
+duckduckgo-search
+transformers
+torch
+accelerate
+bitsandbytes
+auto-gptq
