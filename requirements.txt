@@ -1,4 +1,3 @@
-wheel
 discord.py==2.3.2
 Flask==2.3.3
 requests==2.32.0
