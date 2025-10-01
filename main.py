@@ -50,10 +50,46 @@ async def log_action(guild, text):
         print("Log error:", e)
 
 # -------------------- DISCORD EVENTS --------------------
+
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.Game(name="Serving the Clan"))
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    for guild in bot.guilds:
+        await log_action(guild, f"✅ Bot is online in **{guild.name}**")
+
+@bot.event
+async def on_member_join(member):
+    await log_action(member.guild, f"👋 {member} joined the server.")
+
+@bot.event
+async def on_member_remove(member):
+    await log_action(member.guild, f"👋 {member} left or was removed from the server.")
+
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot:
+        return
+    await log_action(message.guild, f"🗑️ Message deleted in {message.channel.mention} by {message.author}: `{message.content}`")
+
+@bot.event
+async def on_message_edit(before, after):
+    if before.author.bot or before.content == after.content:
+        return
+    await log_action(before.guild, f"✏️ Message edited in {before.channel.mention} by {before.author}:\n**Before:** {before.content}\n**After:** {after.content}")
+
+@bot.event
+async def on_guild_channel_create(channel):
+    await log_action(channel.guild, f"📢 Channel created: {channel.name}")
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    await log_action(channel.guild, f"❌ Channel deleted: {channel.name}")
+
+@bot.event
+async def on_command_error(ctx, error):
+    await ctx.send(f"⚠️ Error: {error}")
+    await log_action(ctx.guild, f"⚠️ Error in command `{ctx.command}` by {ctx.author}: {error}")
 
 # -------------------- COMMANDS --------------------
 @bot.command()
@@ -134,3 +170,4 @@ async def shutdown(ctx):
 if __name__ == "__main__":
     keep_alive()
     bot.run(TOKEN)
+
